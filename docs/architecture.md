@@ -157,14 +157,15 @@ flowchart LR
     ARCH --> RESTORE["Replay on restart"]
     ARCH --> RETAIN{"Retention policy"}
     RETAIN -->|"within window"| KEEP["Keep"]
-    RETAIN -->|"expired / on request"| DELETE["Delete — [VERIFY AGAINST IMPLEMENTATION]"]
+    RETAIN -->|"expired"| DELETE["Delete — automatic (prune at boot + hourly)"]
+    RETAIN -->|"on request"| MANUAL["Delete manually, then log it"]
     NOTIFY --> REVOKE["Revoke webhook / rotate secrets"]
 ```
 
 **Lifecycle controls that exist today:** append-only archive, replay on
-restart, secret rotation by editing `config.json`, webhook self-disable on
-revocation.
+restart, automatic age-based pruning at boot and hourly (`dataRetentionDays`),
+secret rotation by editing `config.json`, webhook self-disable on revocation.
 
-**Lifecycle controls to implement:** automatic age-based deletion
-(`DATA_RETENTION_DAYS`), per-participant deletion requests, and audit logging.
-Marked **[VERIFY AGAINST IMPLEMENTATION]** — see [privacy.md](privacy.md).
+**Lifecycle controls still on you:** per-participant deletion requests (stop →
+edit the archive → restart) and audit logging — see
+[privacy.md](privacy.md) and the README roadmap.

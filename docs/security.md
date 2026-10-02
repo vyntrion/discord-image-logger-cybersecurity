@@ -10,7 +10,10 @@ reporting process live in [SECURITY.md](../SECURITY.md).
 | Discord webhook URL | `config.json` (git-ignored) or `IMAGE_LOGGER_WEBHOOK` | docs, issues, screenshots, commits |
 | Dashboard token | `config.json` → `dashboard.token` | public URLs, screenshots |
 | ngrok authtoken | `NGROK_AUTHTOKEN` env var or `config.json` | commits, shell history in shared sessions |
-| Bot token (if applicable) | environment only | anywhere, ever, in plaintext |
+
+> This build uses **no bot token** — integration is webhook-outbound. If a
+> fork ever adds a bot, its token belongs in the environment only: nowhere
+> else, ever, in plaintext.
 
 Rotate any secret that has been exposed: create a new webhook, regenerate the
 dashboard token, re-issue the tunnel authtoken.
@@ -57,8 +60,9 @@ secrets/ , credentials/     anything else sensitive
 
 - Run the service as an unprivileged user; no root, no sudo.
 - `host` stays `127.0.0.1` — the tunnel is the only ingress.
-- If an inbound bot is used **[VERIFY AGAINST IMPLEMENTATION]**: minimum
-  permissions, minimum intents, private test server only.
+- This build runs **no bot**: no gateway connection, no privileged intents, no
+  bot token. If a fork adds one: minimum permissions, minimum intents, private
+  test server only.
 - Filesystem: the process needs write access to `logs/` and nothing more.
 
 ## HTTPS
@@ -69,17 +73,21 @@ or tests.
 
 ## Authentication
 
-- `/dashboard`, `/events`, `/api/logs`, `/api/link` require `?token=…`.
+- `/dashboard`, `/events`, `/api/logs`, `/api/link` require a token, via
+  `?token=…` or the `X-Dashboard-Token` header.
 - Missing/wrong token → **401** (verified by the project's own checks).
+- Comparison is **constant-time** (`hmac.compare_digest`), so a wrong token
+  cannot be guessed byte-by-byte through response timing.
 - Keep the token non-empty whenever the service is reachable beyond loopback.
-- [VERIFY AGAINST IMPLEMENTATION] Move to header-based, constant-time
-  comparison when your tooling supports it; query tokens reach proxy logs.
+- Prefer the **header** over the query string where your tooling allows it —
+  query strings end up in tunnel and proxy access logs.
 
 ## Input validation
 
 - Validate method, path, and headers before dispatching.
-- Reject oversized bodies before buffering them (`MAX_IMAGE_SIZE_MB` is
-  documented but **not yet enforced**).
+- Oversized bodies are rejected **before** they are buffered: anything over
+  `maxImageSizeMb` (default 10 MB) gets `413 Payload Too Large`, and the
+  preview-image fetch refuses to download past the same cap.
 - Never use client-supplied file names as filesystem paths — sanitize or
   allow-list them.
 - Treat every header (`Cf-Connecting-Ip`, `X-Forwarded-For`, `User-Agent`) as
@@ -89,8 +97,14 @@ or tests.
 
 Already paced: geolocation lookups (provider quota + cache) and outbound
 webhook delivery (`429 retry_after` handling, bounded queue of 500).
-[VERIFY AGAINST IMPLEMENTATION] Add per-IP request limits before exposing the
-service beyond a small lab.
+
+**Request-level limits are deliberately not implemented in the app**, and
+adding them naively would be misleading: behind a tunnel every client arrives
+from the tunnel's local connector, so "per client IP" collapses to one address
+(shared by everyone), while `X-Forwarded-For` is attacker-controlled if you
+trust it directly. Enforce request limits where the real client address lives
+— your tunnel/CDN layer (Cloudflare Access, provider rate rules) or an
+authenticating reverse proxy — before exposing the service beyond a small lab.
 
 ## Logging hygiene
 

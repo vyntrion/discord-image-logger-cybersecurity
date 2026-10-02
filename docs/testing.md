@@ -2,9 +2,8 @@
 
 > **Status:** this repository currently ships **no automated test suite**.
 > The strategy below is what a contributor should build and what the project's
-> own manual checks cover today. Items marked
-> **[VERIFY AGAINST IMPLEMENTATION]** must be confirmed against the code
-> before being documented as working behavior.
+> own manual checks cover today. Every expectation stated here matches the
+> current implementation of `main.py`.
 
 ## Ground rules
 
@@ -45,6 +44,8 @@ End-to-end checks (all against your own instance):
 | 9 | Geolocation | Coarse location resolved for a public test IP |
 | 10 | Favicon requests | Return `204`, **not** archived as events |
 | 11 | Archive growth | `logs/hits.jsonl` gains one line per event |
+| 12 | Retention | Append a line with an old `ts`, restart → the line is pruned |
+| 13 | Oversized POST | `Content-Length` over the cap → `413` |
 
 > **Case-sensitivity note:** some tunnels lowercase response headers. When
 > asserting `Content-Type`, look it up case-insensitively or the test fails
@@ -57,11 +58,13 @@ End-to-end checks (all against your own instance):
 | PNG request | Synthetic `.png`, correct `Accept` | Valid PNG bytes, `image/png` |
 | JPG request | Synthetic `.jpg` | Valid JPEG, decodable |
 | Unsupported file type | `.txt`/`.exe` request | `4xx`, nothing archived |
-| Oversized file | Body > `MAX_IMAGE_SIZE_MB` | Rejected **before** buffering — *not yet enforced* **[VERIFY AGAINST IMPLEMENTATION]** |
+| Oversized body | `Content-Length` > `maxImageSizeMb` | `413 Payload Too Large` — rejected before the body is buffered |
+| Oversized preview image | Image URL serving > `maxImageSizeMb` | Fetch refused, nothing cached |
 | Missing attachment | Request with no image parameter | No event recorded |
 | Malformed request | Broken headers/path | `4xx`, no traceback leaked to the client |
-| Invalid authentication | Wrong/missing token | `401` on dashboard and API routes |
-| Duplicate event | Same event replayed | De-duplicated or idempotent **[VERIFY AGAINST IMPLEMENTATION]** |
+| Invalid authentication | Wrong/missing token | `401` on dashboard and API routes (constant-time compare) |
+| Duplicate request | Same request sent twice | Two distinct events with unique ids — no cross-request de-duplication (by design) |
+| Expired event | Archive line with `ts` older than `dataRetentionDays` | Removed at boot or the next hourly sweep |
 | Tunnel unavailable | Stop the tunnel provider | Clear error; local mode still serves |
 | Webhook revoked | Mock endpoint returning `404` | Worker disables itself and logs once |
 | Webhook rate-limited | Mock endpoint returning `429` + `retry_after` | Backoff honoured, no burst |

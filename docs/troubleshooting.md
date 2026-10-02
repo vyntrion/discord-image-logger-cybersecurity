@@ -1,35 +1,18 @@
 # Troubleshooting
 
-## Bot does not detect attachments
-
-> [VERIFY AGAINST IMPLEMENTATION] This section applies to deployments that
-> include an inbound Discord bot. The tree documented in the README integrates
-> with Discord through an **outbound webhook URL** and has no inbound bot — if
-> you are running that configuration, see *Events not appearing* below instead.
-
-Possible causes:
-
-| Cause | What to check |
-|---|---|
-| Missing intents | Enable only the intents the code uses; privileged intents (message content, presence, members) require developer-portal opt-in |
-| Insufficient permissions | The bot needs read access to the channel where the test image is posted |
-| Event handler not registered | Confirm the handler is bound before `login()` |
-| Bot not connected | Look for the ready/disconnect log lines |
-| Wrong channel permissions | Category overwrites can silently deny the channel |
-| Testing in the wrong server | Invites are guild-scoped |
-
-**Least privilege:** request the minimum permissions and intents; do not grant
-administrator.
-
-## Events not appearing (webhook-based configuration)
+## Events not appearing
 
 - **Webhook revoked** — the console logs `webhook rejected with HTTP 404`.
   Create a new webhook in *your* server and re-run `python3 setup.py`.
+- **Webhook not configured** — the banner prints `webhook NOT configured`;
+  set `config.json` → `webhook` or `IMAGE_LOGGER_WEBHOOK`.
 - **Nobody opened the link** — a "link shared" card only means the preview was
   unfurled. A visitor event appears when a human actually opens the URL.
 - **Looking at the wrong channel** — webhooks post to the channel they were
   created in.
 - **Dashboard auth** — `/api/logs` returns **401** without `?token=…`.
+- **Event suppressed** — check `suppressed` on the event; a suppressed event
+  is deliberately not delivered.
 
 ## HTTP endpoint unavailable
 
@@ -59,17 +42,17 @@ Do **not** attempt to circumvent provider rate limits.
 
 ## Environment variables not loading
 
-- Confirm the file name/location (`.env` next to the entry point) and that it
-  is not named `.env.example`.
-- If no loader is present, export in the shell:
+- `.env` must sit next to `main.py`, be named exactly `.env` (not
+  `.env.example`), and use `KEY=VALUE` lines — `#` comments are skipped.
+- A value exported in the shell always beats the file:
 
   ```bash
   export IMAGE_LOGGER_WEBHOOK="https://discord.com/api/webhooks/<id>/<secret>"
   python3 run.py
   ```
 
-- **Restart the process** — environment variables are read at start-up.
-- Confirm precedence: `IMAGE_LOGGER_WEBHOOK` overrides `config.json`.
+- **Restart the process** — configuration is read once at start-up.
+- Confirm precedence: shell > `.env` > `config.json` > built-in default.
 
 ## No image preview in the crawler
 
@@ -94,7 +77,6 @@ another device will never arrive.
 
 ## Getting more detail
 
-Run with debug output enabled (`config.json` → `debug: true`
-**[VERIFY AGAINST IMPLEMENTATION]** — confirm the key in your version) and read
-`logs/`. Never paste console output containing webhook URLs or tokens into a
-public issue — redact them first.
+Run with debug output (`LOG_LEVEL=DEBUG` in `.env`, or `config.json` →
+`logLevel: "DEBUG"`) and read `logs/`. Never paste console output containing
+webhook URLs or tokens into a public issue — redact them first.

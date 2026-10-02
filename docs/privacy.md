@@ -20,9 +20,10 @@ feature.
 - Files from the visitor's device
 - Any Discord identifier in the webhook path
 
-> [VERIFY AGAINST IMPLEMENTATION] If your fork adds an inbound bot that reads
-> attachments, document exactly which fields it records and update this page
-> before publishing.
+> **No inbound bot exists in this build.** Discord integration is a single
+> outbound webhook, so nothing ever reads messages or attachments. If your
+> fork adds a bot that touches attachments, document exactly which fields it
+> records and update this page before publishing.
 
 ## Core principles
 
@@ -37,7 +38,8 @@ feature.
 4. **Deletion on request.** Participants should be able to ask for removal,
    and you should be able to do it. Provide a documented path:
    stop the service → delete matching entries from `logFile` → restart →
-   confirm. Automated pruning is on the roadmap (see README → Data Retention).
+   confirm. Age-based deletion is handled for you (see below); on-request
+   deletion is still a manual, documented step.
 5. **Protect the archive.** `logs/` is git-ignored. Keep the directory
    permission-restricted, do not sync it to shared drives without review, and
    never attach it to issues or support requests.
@@ -75,10 +77,10 @@ worker already does).
 
 | | |
 |---|---|
-| Default | 7 days |
+| Default | 7 days (`dataRetentionDays`) |
 | Recommended | Shortest necessary |
-| Enforcement today | Manual — `DATA_RETENTION_DAYS` is **not yet enforced** [VERIFY AGAINST IMPLEMENTATION] |
-| Manual procedure | Stop service → remove expired entries from `logs/hits.jsonl` → restart → log what was deleted |
+| Enforcement today | **Automatic.** `prune_archive()` runs at boot and then hourly, dropping every archive entry older than the window — under the archive lock, so live writes are never corrupted. Set `DATA_RETENTION_DAYS=0` to keep everything. |
+| On-request deletion | Stop service → remove the participant's entries from `logs/hits.jsonl` → restart → log what was deleted |
 
 ## Review checklist
 

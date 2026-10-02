@@ -31,15 +31,17 @@ contribution is expected to reinforce transparency, consent, and privacy.
    bash -n start.sh
    ```
 
-   > [VERIFY AGAINST IMPLEMENTATION] This repository currently ships no
-   > automated test suite. If you add tests, document how to run them here and
-   > in `docs/testing.md`.
+   > This repository ships no automated test suite yet — the commands above
+   > are the checks that exist today. If you add tests, document how to run
+   > them here and in `docs/testing.md`.
 
-4. **Format / lint** with the project's chosen tools and keep style
-   consistent with the surrounding code:
+4. **Format / lint** — the project enforces no formatter, so match the
+   surrounding style (stdlib, type hints where they help, comments that
+   explain *why*). If you introduce a tool, wire it into the checks above and
+   document it in this file:
 
    ```bash
-   # [VERIFY AGAINST IMPLEMENTATION] add the formatter/linter you adopt, e.g.
+   # none enforced today — when you adopt one, list it here, e.g.:
    # python3 -m black .
    # python3 -m ruff check .
    ```
@@ -71,9 +73,11 @@ public issue or PR.
 
 ## Code of Conduct
 
-[VERIFY AGAINST IMPLEMENTATION] Add a `CODE_OF_CONDUCT.md`
-(e.g. the Contributor Covenant) and link it here before publishing the
-repository.
+This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.md).
+By participating, you agree to uphold its standards; reported violations go to
+**vyzx.live@gmail.com**. Note the additional scope rule in that document:
+requests to help with unauthorized monitoring, credential theft, or evading
+platform controls are off-topic and will be closed.
 
 ## License
 

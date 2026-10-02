@@ -4,34 +4,27 @@
 
 ```text
 IMAGE-LOGGER/
-├── main.py            # HTTP server, dashboard, geo + webhook workers, config loading
-├── run.py             # launcher: starts server, acquires tunnel, runs self-test
-├── setup.py           # interactive configuration wizard (validates webhook/image)
-├── start.sh           # convenience wrapper (runs setup on first run, then run.py)
-├── config.json        # local configuration — git-ignored
-├── requirements.txt   # intentionally empty of runtime dependencies
-├── .env.example       # environment-variable template (placeholders only)
+├── main.py              # HTTP server, dashboard, geo + webhook workers, config loading
+├── run.py               # launcher: starts server, acquires tunnel, runs self-test
+├── setup.py             # interactive configuration wizard (validates webhook/image)
+├── start.sh             # convenience wrapper (runs setup on first run, then run.py)
+├── config.json          # local configuration — git-ignored
+├── requirements.txt     # intentionally empty of runtime dependencies
+├── .env.example         # environment-variable template (placeholders only)
 ├── .gitignore
 ├── README.md
 ├── SECURITY.md
 ├── CONTRIBUTING.md
-├── docs/              # this documentation set
-├── logs/              # JSONL archive created at runtime — git-ignored
-├── cloudflared        # tunnel binary, downloaded on demand — git-ignored
-└── ngrok              # tunnel binary, downloaded on demand — git-ignored
+├── CODE_OF_CONDUCT.md   # Contributor Covenant 2.1
+├── docs/                # this documentation set
+├── logs/                # JSONL archive created at runtime — git-ignored
+├── cloudflared          # tunnel binary, downloaded on demand — git-ignored
+└── ngrok                # tunnel binary, downloaded on demand — git-ignored
 ```
 
-If your fork contains an inbound bot module, an *example* layout would look
-like this — **those files do not exist in this tree**:
-
-```text
-bot/client.py  bot/events.py  bot/permissions.py
-server/app.py  server/routes.py
-config.py  main.py
-```
-
-**[VERIFY AGAINST IMPLEMENTATION]** — confirm against your own source before
-documenting it as real.
+There is no `bot/` package by design: Discord integration is one outbound
+webhook, so the codebase has no gateway connection, no intents, and no bot
+token to protect.
 
 ## Design principles
 
@@ -59,9 +52,9 @@ python3 run.py --tunnel ssh      # specific provider
 
 | Area | Responsibility |
 |---|---|
-| Config loading | Merges defaults + `config.json`, applies `IMAGE_LOGGER_WEBHOOK`, generates `dashboard.token` |
-| HTTP handler | Routes: `/healthz`, dashboard, API, preview/image, page, favicon |
-| Event logging | `_log_hit` normalizes an event and appends JSONL; replay on restart |
+| Config loading | Merges defaults + `config.json`, loads `.env`, applies env overrides (`IMAGE_LOGGER_WEBHOOK`, `TUNNEL_URL`, `LOG_LEVEL`, `DATA_RETENTION_DAYS`, `MAX_IMAGE_SIZE_MB`), generates `dashboard.token` |
+| HTTP handler | Routes: `/healthz`, dashboard, API, preview/image, page, favicon; `413` on oversized bodies; constant-time token compare |
+| Event logging | `_log_hit` normalizes an event and appends JSONL; replay on restart; `prune_archive()` drops entries past retention |
 | Geolocation worker | Paced lookups with cache TTLs and a fallback provider |
 | Webhook worker | Queue → embed build → POST with `429 retry_after` backoff → one-shot disable on `401/403/404` |
 | Dashboard | HTML/JS with SSE primary and polling fallback |
@@ -86,18 +79,19 @@ bash -n start.sh
 git diff --cached | grep -iE "discord\.com/api/webhooks|authtoken|BEGIN .* PRIVATE KEY" || echo "clean"
 ```
 
-> [VERIFY AGAINST IMPLEMENTATION] Add your formatter/linter commands here once
-> adopted (see [CONTRIBUTING.md](../CONTRIBUTING.md)).
+No formatter or linter is enforced yet — match the surrounding style. If you
+adopt one, add its command to this block and to
+[CONTRIBUTING.md](../CONTRIBUTING.md) in the same PR.
 
 ## Extending safely
 
 | If you want to… | Do this |
 |---|---|
 | Add an inbound bot | Document intents/permissions, request minimum scope, update [privacy.md](privacy.md) with every new field collected |
-| Add file uploads | Enforce `MAX_IMAGE_SIZE_MB`, sanitize names, store outside the web root, define retention |
+| Add file uploads | Enforce `maxImageSizeMb`, sanitize names, store outside the web root, define retention |
 | Add new outbound calls | Add timeouts, retries with backoff, and secret-safe logging |
 | Add a dashboard feature | Keep token gating; redact IPs/identifiers by default |
-| Add retention | Implement `DATA_RETENTION_DAYS` pruning and document the deletion path |
+| Change retention | Adjust `dataRetentionDays`, keep pruning under the archive lock, document the deletion path |
 
 Every change that touches collected data must update
 [privacy.md](privacy.md) and [security.md](security.md) in the same PR.

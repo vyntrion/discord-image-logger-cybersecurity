@@ -3,8 +3,16 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Security Policy](https://img.shields.io/badge/security-policy-red.svg)](SECURITY.md)
+[![Code of Conduct](https://img.shields.io/badge/code%20of%20conduct-Contributor%20Covenant-ff69b4.svg)](CODE_OF_CONDUCT.md)
 [![Educational / Authorized Use Only](https://img.shields.io/badge/use-educational%20%2F%20authorized%20only-lightgrey.svg)](#legal--responsible-use-disclaimer)
 [![Dependencies: none](https://img.shields.io/badge/dependencies-stdlib%20only-brightgreen.svg)](requirements.txt)
+
+**Documentation:** [Getting started](docs/getting-started.md) ·
+[Configuration](docs/configuration.md) · [Architecture](docs/architecture.md) ·
+[Tunnels](docs/tunnel.md) · [Privacy](docs/privacy.md) ·
+[Security](docs/security.md) · [Troubleshooting](docs/troubleshooting.md) ·
+[Testing](docs/testing.md) · [Development](docs/development.md) ·
+[Contributing](CONTRIBUTING.md) · [Code of Conduct](CODE_OF_CONDUCT.md)
 
 An event-driven web application for **authorized, laboratory-grade demonstration** of
 Discord image/attachment event handling, outbound webhook delivery, and locally
@@ -48,12 +56,11 @@ with the configured image bytes so that a link preview can render during
 development and testing. Human requests receive the interactive page. Events
 derived from both paths are recorded as structured log entries.
 
-> [VERIFY AGAINST IMPLEMENTATION] If your deployment includes an inbound
-> `discord.py` bot that downloads *message attachments*, document its module
-> layout, intents, and permission checks here. The current tree in this
+> **Discord integration is webhook-outbound only.** The tree in this
 > repository contains `main.py`, `run.py`, `setup.py`, and `start.sh` — see
 > [Development](#development) — and integrates with Discord through an
-> **outbound webhook URL**, not an inbound bot token.
+> **outbound webhook URL**, not an inbound bot token, so no bot intents or
+> privileged permissions are involved at all.
 
 **How an HTTP endpoint is exposed for development.** Local development usually
 means the service listens on `127.0.0.1:8080`, which is unreachable from
@@ -87,14 +94,17 @@ Implemented in this repository:
 | Interactive setup wizard | `setup.py` validates webhook and image URLs before saving |
 | Zero dependencies | Python standard library only |
 | Startup self-test | confirms the tunnel really reaches the local server |
+| `.env` support | optional `KEY=VALUE` file is loaded; shell variables win |
+| Automatic data retention | events older than `dataRetentionDays` are pruned hourly |
+| Request size limits | bodies and preview fetches over `maxImageSizeMb` → `413` |
+| Log verbosity control | `logLevel` (`DEBUG`/`INFO`/`WARN`/`ERROR`) |
+| Fixed tunnel URL | `tunnelUrl` advertises a front door you already run |
 
 Not implemented in this repository (do not claim them in derived docs):
 
-- inbound `discord.py` bot / attachment download → **[VERIFY AGAINST IMPLEMENTATION]**
-- automatic data-retention deletion job → see [Data Retention](#data-retention)
+- inbound `discord.py` bot / attachment download — integration is
+  webhook-outbound only, see above
 - automated test suite → see [Testing](#testing)
-- `.env` loader → configuration is `config.json` plus two environment variables,
-  see [Configuration](#configuration)
 
 ---
 
@@ -215,7 +225,9 @@ The wizard validates the webhook URL and the image URL before saving, prints a
 dashboard token, and can launch the app with `--start`.
 
 `.env.example` is provided for deployments that standardise on environment
-files. **Populate it locally only — never commit a filled-in copy.**
+files — `main.py` loads a `.env` sitting next to it automatically (`KEY=VALUE`
+lines, `#` comments). **A variable already set in your shell always wins over
+the file, and you should never commit a filled-in copy.**
 
 ```dotenv
 DISCORD_TOKEN=
@@ -228,12 +240,14 @@ MAX_IMAGE_SIZE_MB=10
 
 | Variable | Meaning | Honoured today? |
 |---|---|---|
-| `DISCORD_TOKEN` | Bot token, *if* an inbound bot module is present | [VERIFY AGAINST IMPLEMENTATION] — no bot module in this tree |
-| `WEBHOOK_URL` | Destination Discord webhook | Partially — the app reads `IMAGE_LOGGER_WEBHOOK` |
-| `TUNNEL_URL` | Fixed tunnel hostname to advertise | [VERIFY AGAINST IMPLEMENTATION] — URLs are discovered at launch |
-| `LOG_LEVEL` | Verbosity of console logging | [VERIFY AGAINST IMPLEMENTATION] |
-| `DATA_RETENTION_DAYS` | Age after which collected events are deleted | **Not enforced yet** — see [Data Retention](#data-retention) |
-| `MAX_IMAGE_SIZE_MB` | Largest accepted image | **Not enforced yet** — see [Threat Model](#threat-model) |
+| `DISCORD_TOKEN` | Bot token, *if* an inbound bot module is present | Not used — this tree has no bot module |
+| `WEBHOOK_URL` | Destination Discord webhook | Yes — same as `IMAGE_LOGGER_WEBHOOK` |
+| `TUNNEL_URL` | Fixed tunnel URL to advertise instead of launching one | Yes — `run.py` skips provider launch and self-tests it |
+| `LOG_LEVEL` | Verbosity of console logging | Yes — `DEBUG` \| `INFO` \| `WARN` \| `ERROR` |
+| `DATA_RETENTION_DAYS` | Age after which collected events are deleted | Yes — pruned at boot and hourly; `0` disables |
+| `MAX_IMAGE_SIZE_MB` | Largest accepted request body / preview image | Yes — over-limit requests get `413` |
+| `IMAGE_LOGGER_WEBHOOK` | Same as `WEBHOOK_URL`, project-specific name | Yes |
+| `NGROK_AUTHTOKEN` | ngrok credential for `--tunnel ngrok` | Yes |
 
 Key `config.json` entries:
 
@@ -248,7 +262,14 @@ Key `config.json` entries:
 | `accurateLocation` | Off by default; enables a browser location prompt (**asks the visitor**) |
 | `dashboard.token` | Auto-generated; required for `/dashboard`, `/events`, `/api/logs`, `/api/link` |
 | `tunnel` | `auto` \| `cloudflared` \| `pinggy` \| `ssh` \| `serveo` \| `ngrok` \| `none` |
+| `tunnelUrl` | Optional fixed public URL to advertise instead of launching a tunnel |
+| `dataRetentionDays` | Archive entries older than this are deleted (default `7`, `0` = keep forever) |
+| `maxImageSizeMb` | Request-body and preview-image cap (default `10`) |
+| `logLevel` | Console verbosity (default `INFO`) |
 | `logFile` | JSONL archive path |
+
+Every `config.json` key has an environment twin where it makes sense
+(`DATA_RETENTION_DAYS` → `dataRetentionDays`, and so on); the shell wins.
 
 ---
 
@@ -259,10 +280,10 @@ Key `config.json` entries:
    Integrations → Webhooks → New Webhook → *Copy Webhook URL*. Paste it into
    `config.json` → `webhook`, or export `IMAGE_LOGGER_WEBHOOK`.
 3. **Configure intents/permissions** — not required for the webhook-only
-   integration in this tree. If you add an inbound bot
-   [VERIFY AGAINST IMPLEMENTATION], enable **only** the intents it needs
-   (typically message content intent *only if* it must read attachments), and
-   request the **minimum** permission set on the invite.
+   integration in this tree. If you later add an inbound bot of your own,
+   enable **only** the intents it needs (typically message content intent
+   *only if* it must read attachments), and request the **minimum** permission
+   set on the invite.
 4. **Invite to an authorized test server** — use a private server with test
    accounts only.
 5. **Least privilege** — no administrator, no manage-messages, no privileged
@@ -348,16 +369,14 @@ python3 run.py
 #   dashboard https://<your-tunnel-host>/dashboard?token=<token>
 #   self-test PASSED
 
-# 3. If you use a fixed tunnel URL, record it in config.json / .env
-#    (TUNNEL_URL is [VERIFY AGAINST IMPLEMENTATION] — URLs are discovered at launch)
+# 3. Optional: advertise a tunnel you already run (config.json → tunnelUrl,
+#    or TUNNEL_URL= in .env) — run.py then skips launching a provider
+#    (there is no inbound bot in this build, so there is nothing else to start)
 
-# 4. If your deployment includes an inbound bot: start it now
-#    [VERIFY AGAINST IMPLEMENTATION]
-
-# 5. Open the public link from a test account in your private test server
+# 4. Open the public link from a test account in your private test server
 #    (or simply visit it yourself)
 
-# 6. Watch the event appear on the dashboard, in logs/hits.jsonl,
+# 5. Watch the event appear on the dashboard, in logs/hits.jsonl,
 #    and — if a valid webhook is configured — as a Discord embed
 ```
 
@@ -367,34 +386,65 @@ Stop everything with `Ctrl+C`; the tunnel is torn down with the process.
 
 ## Example Event
 
-Sanitized example of an archived event:
+Sanitized example of an archived event — this is the exact shape `main.py`
+writes to `logs/hits.jsonl` (one JSON object per line), produced from
+synthetic test data:
 
 ```json
 {
-  "event": "image_attachment",
-  "guild_id": "REDACTED",
-  "channel_id": "REDACTED",
-  "message_id": "REDACTED",
-  "filename": "example.png",
-  "content_type": "image/png",
-  "size": 123456,
-  "timestamp": "2026-01-01T00:00:00Z"
+  "id": "9f2c41ab77e3",
+  "type": "log",
+  "ts": 1770000000.123,
+  "data": {
+    "id": "9f2c41ab77e3",
+    "ip": "203.0.113.10",
+    "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0",
+    "os": "Windows",
+    "browser": "Chrome",
+    "endpoint": "/",
+    "geo": {
+      "status": "success",
+      "country": "Exampleland",
+      "regionName": "Example Province",
+      "city": "Example City",
+      "lat": 1.23,
+      "lon": 4.56,
+      "timezone": "Etc/UTC",
+      "isp": "Example ISP",
+      "org": "Example ISP",
+      "as": "AS64500 Example",
+      "mobile": false,
+      "proxy": false,
+      "hosting": false,
+      "query": "203.0.113.10"
+    },
+    "geoStatus": "ok",
+    "location": null,
+    "ping": false,
+    "suppressed": false,
+    "hits": 1,
+    "unique": 1,
+    "countries": 1
+  }
 }
 ```
 
 | Field | Meaning |
 |---|---|
-| `event` | Event discriminator |
-| `guild_id` / `channel_id` / `message_id` | Discord identifiers, **redacted** in documentation and examples |
-| `filename` | Attachment file name as provided by the client |
-| `content_type` | MIME type reported for the attachment |
-| `size` | Size in bytes |
-| `timestamp` | ISO-8601 UTC time of the event |
+| `id` / `type` / `ts` | Event envelope — id, discriminator (`log` \| `geo` \| `alert` \| `open`), Unix timestamp |
+| `data.ip` | Client address as seen by the server (documentation uses `203.0.113.10`, a TEST-NET-3 address) |
+| `data.ua` / `os` / `browser` | User-agent string and parsed client family |
+| `data.endpoint` | Requested path |
+| `data.geo` | Coarse location from the geolocation API — city/region/country level only, never a precise position |
+| `data.geoStatus` | `ok` \| `local` \| `unavailable` — how the enrichment resolved |
+| `data.location` | Visitor-supplied position, and **only** when `accurateLocation` is on and the visitor approved the browser prompt |
+| `data.ping` / `suppressed` | Whether this event pings `@everyone`, and whether webhook delivery was suppressed by policy |
+| `data.hits` / `unique` / `countries` | Session counters shown on the dashboard |
 
-> [VERIFY AGAINST IMPLEMENTATION] The exact field set written by this codebase
-> differs (it records client IP, coarse geo, user-agent family, and request
-> path rather than Discord IDs). Always publish examples produced from
-> **synthetic** test data, never from real participants.
+> **No Discord message identifiers are recorded.** This build talks to Discord
+> through an outbound webhook only — it never reads messages, so guild, channel,
+> and message IDs never enter the archive. Always publish examples produced
+> from **synthetic** test data, never from real participants.
 
 ---
 
@@ -422,14 +472,15 @@ Full policy: [docs/privacy.md](docs/privacy.md).
 
 | | |
 |---|---|
-| **Default policy** | 7 days |
+| **Default policy** | 7 days (`dataRetentionDays: 7`) |
 | **Recommended** | The shortest period that satisfies the exercise; shorter is better |
-| **Current implementation** | Events accumulate in `logFile` (`logs/hits.jsonl`). **Automatic pruning is not implemented** — mark `DATA_RETENTION_DAYS=7` in `.env.example` as the intended policy and delete manually or via your own cron until it ships. [VERIFY AGAINST IMPLEMENTATION] |
-| **Deletion mechanism** | Stop the service, remove the archive (and any dashboard state), restart. Keep a written record of what was deleted. |
+| **Current implementation** | **Enforced.** `prune_archive()` runs at boot and then hourly, deleting every JSONL entry whose `ts` is older than the window. It takes the archive lock, so it can never race a live append, and it keeps unparseable lines rather than destroying data. |
+| **Tuning** | `DATA_RETENTION_DAYS=30` (env) or `dataRetentionDays` (`config.json`); set it to `0` to keep everything. |
+| **Full deletion** | Stop the service, remove `logs/hits.jsonl`, restart. Keep a written record of what was deleted. |
 
-Guidance: write retention as code (a scheduled job that drops entries older
-than *N* days at startup and on a timer) rather than relying on someone
-remembering. See [Roadmap](#roadmap).
+Retention is written as code — a job that drops entries older than *N* days at
+startup and on a timer — rather than relying on someone remembering to run
+`rm`.
 
 ---
 
@@ -476,15 +527,16 @@ request rate limits · log sanitization (never log tokens, webhook secrets, or
 
 ## Threat Model
 
-**Assets** — bot token (if present) · webhook URL · collected test data ·
-tunnel credentials · dashboard token · server configuration.
+**Assets** — webhook URL · collected test data · tunnel credentials ·
+dashboard token · server configuration.
 
 | Threat | Mitigation (implemented / recommended) |
 |---|---|
 | Token leakage via commits | `.gitignore`, `.env.example` placeholders, secret scanning |
 | Unauthorized endpoint access | `dashboard.token` → HTTP 401 on `/dashboard`, `/events`, `/api/logs`, `/api/link` |
-| Malicious uploads | [VERIFY AGAINST IMPLEMENTATION] — no upload path is exercised in this tree; validate before adding one |
-| Oversized files | [VERIFY AGAINST IMPLEMENTATION] — enforce `MAX_IMAGE_SIZE_MB` before accepting bodies |
+| Malicious uploads | No upload route exists — nothing accepts a file today; if one is added, validate type and size before touching the disk |
+| Oversized files | **Implemented** — `maxImageSizeMb` caps preview fetches and returns `413` for oversized request bodies |
+| Unbounded data growth | **Implemented** — `dataRetentionDays` prunes the archive at boot and hourly |
 | Malicious filenames | Never use client-supplied names as filesystem paths; sanitize/allow-list |
 | Webhook abuse | Webhook worker disables itself on 401/403/404 responses |
 | Exposed tunnel | Keep `host: 127.0.0.1`; stop the tunnel when testing ends; token-gate admin routes |
@@ -554,14 +606,18 @@ not legal advice.
 
 ## Troubleshooting
 
-### Bot does not detect attachments
+### Discord embed never arrives
 
-- Missing or over-broad intents → enable only what the code uses. [VERIFY AGAINST IMPLEMENTATION]
-- Insufficient permissions in the test channel.
-- Event handler not registered / bot not connected (check the connection log).
-- Wrong channel permissions for the bot role.
-- *(For this tree: there is no inbound bot — confirm you are looking at the
-  webhook-outbound path instead.)*
+- Webhook empty or malformed → run `python3 setup.py`; the banner prints
+  `webhook configured` vs `NOT configured`.
+- Webhook revoked in Discord → the worker disables itself on `401/403/404`
+  and says so in the console; create a new webhook URL.
+- Rate limited (`429`) → the worker honours `retry_after` and backs off; wait,
+  don't restart in a loop.
+- Event suppressed by policy → check `suppressed` on the event (a suppressed
+  event is deliberately not delivered).
+- Location missing from the embed → geo enrichment can lag a few seconds or be
+  rate-limited; watch for `GEO` lines and the `geoStatus` field.
 
 ### HTTP endpoint unavailable
 
@@ -585,11 +641,12 @@ Do **not** attempt to circumvent provider rate limits.
 
 ### Environment variables not loading
 
-- Confirm the file name and location (`.env` next to the entry point).
-- Export values in the shell if no loader is present
-  (`export IMAGE_LOGGER_WEBHOOK=...`).
-- Restart the process after changing values — environment variables are read
-  at start-up.
+- `.env` must sit next to `main.py` and use `KEY=VALUE` lines (`#` comments
+  are ignored); the loader runs when the config is read.
+- A value exported in the shell always wins over the file — check
+  `echo $IMAGE_LOGGER_WEBHOOK` if the file seems ignored.
+- Restart the process after changing values — configuration is read once at
+  start-up.
 
 ---
 
@@ -599,18 +656,19 @@ Do **not** attempt to circumvent provider rate limits.
 
 ```text
 IMAGE-LOGGER/
-├── main.py            # HTTP server, dashboard, geo + webhook workers, config
-├── run.py             # launcher: server + tunnel + self-test
-├── setup.py           # interactive configuration wizard
-├── start.sh           # convenience wrapper
-├── config.json        # local configuration (git-ignored)
-├── requirements.txt   # no runtime dependencies
-├── .env.example       # environment-variable template
+├── main.py              # HTTP server, dashboard, geo + webhook workers, config
+├── run.py               # launcher: server + tunnel + self-test
+├── setup.py             # interactive configuration wizard
+├── start.sh             # convenience wrapper
+├── config.json          # local configuration (git-ignored)
+├── requirements.txt     # no runtime dependencies
+├── .env.example         # environment-variable template (copy to .env)
 ├── .gitignore
 ├── README.md
 ├── SECURITY.md
 ├── CONTRIBUTING.md
-├── LICENSE            # MIT
+├── CODE_OF_CONDUCT.md   # Contributor Covenant 2.1
+├── LICENSE              # MIT
 └── docs/
     ├── getting-started.md
     ├── configuration.md
@@ -623,16 +681,9 @@ IMAGE-LOGGER/
     └── development.md
 ```
 
-If your fork contains an inbound bot module, an example layout would be:
-
-```text
-bot/client.py  bot/events.py  bot/permissions.py
-server/app.py  server/routes.py
-config.py  main.py
-```
-
-**[VERIFY AGAINST IMPLEMENTATION]** — that layout is illustrative only; those
-files do not exist in this tree.
+There is deliberately no `bot/` package: Discord integration is a single
+outbound webhook, so there are no intents, no gateway connection, and no bot
+token to manage.
 
 ---
 
@@ -648,11 +699,12 @@ Representative cases:
 | PNG attachment / image request | Valid image bytes, correct content type |
 | JPG request | Valid JPEG, decodable |
 | Unsupported file type | Rejected with 4xx, nothing archived |
-| Oversized file | Rejected at the size limit [VERIFY AGAINST IMPLEMENTATION] |
+| Oversized body (> `maxImageSizeMb`) | `413 Payload Too Large`, nothing archived |
 | Missing attachment | No event recorded |
 | Malformed request | 4xx, no traceback leaked |
 | Invalid authentication | 401 from `/dashboard` and `/api/*` |
-| Duplicate event | Idempotent or de-duplicated [VERIFY AGAINST IMPLEMENTATION] |
+| Duplicate request | Each request is its own event with a unique id — no cross-request de-duplication (by design) |
+| Expired event | Dropped from the archive once it passes `dataRetentionDays` |
 | Tunnel unavailable | Clear error, local mode still works |
 
 Note: this repository currently ships **no automated test suite** — see
@@ -691,9 +743,10 @@ Authorization: Bearer <redacted-token>
 - **Queueing** — bounded queue (500 entries) protects memory when a provider
   is slow.
 - **Rate limiting** — geolocation pacing respects provider quotas.
-- **File-size limits** — enforce before buffering bodies. [VERIFY AGAINST IMPLEMENTATION]
+- **File-size limits** — `maxImageSizeMb` rejects oversized bodies with `413`
+  and refuses over-limit preview fetches before buffering them.
 - **Memory usage** — preview image is cached once; events stream to disk.
-- **Cleanup** — bound the archive size/age (see Data Retention).
+- **Cleanup** — the archive is bounded by age (see Data Retention).
 
 ---
 
@@ -713,7 +766,6 @@ Authorization: Bearer <redacted-token>
 
 Safe improvements under consideration:
 
-- configurable retention with automatic cleanup
 - explicit consent capture and revocation flow
 - audit logs for administrative actions
 - stronger authentication (constant-time token compare, header-based secrets)
@@ -730,9 +782,10 @@ surveillance is out of scope and will not be accepted.
 
 ## Contributing
 
-Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
-Security-sensitive changes must explain their threat model. Never submit real
-user data, real images, or secrets.
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request and
+follow the [Code of Conduct](CODE_OF_CONDUCT.md). Security-sensitive changes
+must explain their threat model. Never submit real user data, real images, or
+secrets.
 
 ---
 
