@@ -483,7 +483,15 @@ def main() -> None:
                      daemon=True).start()
 
     proc, tunnel_url, kind_used = (None, None, "none")
-    if kind != "none":
+    fixed = (app.config.get("tunnelUrl") or "").strip().rstrip("/")
+    if fixed and "://" not in fixed:
+        fixed = "https://" + fixed
+    if fixed.startswith("http") and kind != "none":
+        # a fixed public front door already exists (Caddy, ngrok static domain,
+        # a paid tunnel…) — advertise it instead of launching a new one
+        app.say("net", f"using configured tunnel URL: {fixed}")
+        tunnel_url, kind_used = fixed, "fixed"
+    elif kind != "none":
         proc, tunnel_url, kind_used = launch_tunnel(kind, port)
 
     local = f"http://{app.config['host']}:{port}"

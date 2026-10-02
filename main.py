@@ -16,6 +16,7 @@ Run + tunnel :  python3 run.py
 from __future__ import annotations
 
 import base64
+import hmac
 import html
 import json
 import os
@@ -68,6 +69,14 @@ DEFAULT_CONFIG = {
     "dashboard": {"enabled": True, "path": "/dashboard", "token": ""},
     "logFile": "logs/hits.jsonl",
     "blacklistedIPs": ["27", "104", "143", "164"],
+    # privacy: collected events older than this are deleted (0 disables pruning)
+    "dataRetentionDays": 7,
+    # request/body cap, also applied when fetching the preview image
+    "maxImageSizeMb": 10,
+    # console verbosity: DEBUG | INFO | WARN | ERROR
+    "logLevel": "INFO",
+    # optional pre-existing tunnel URL to advertise instead of launching one
+    "tunnelUrl": "",
 }
 
 CONFIG_PATH = os.path.join(ROOT, "config.json")
@@ -94,9 +103,43 @@ def load_config() -> dict:
                 dst[key] = value
 
     merge(cfg, user)
-    env_hook = os.environ.get("IMAGE_LOGGER_WEBHOOK")
-    if env_hook:
-        cfg["webhook"] = env_hook
+
+    # optional .env support: KEY=VALUE lines, '#' comments, real env vars win.
+    env_path = os.path.join(ROOT, ".env")
+    if os.path.isfile(env_path):
+        try:
+            with open(env_path, "r", encoding="utf-8") as fh:
+                for raw in fh:
+                    line = raw.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    key, _, value = line.partition("=")
+                    key, value = key.strip(), value.strip().strip("\"'")
+                    if key and value:
+                        os.environ.setdefault(key, value)
+        except OSError:
+            pass
+
+    def env_int(name: str) -> int | None:
+        try:
+            return int(os.environ.get(name, "") or "")
+        except ValueError:
+            return None
+
+    # documented environment overrides (an explicit shell value beats .env)
+    hook = os.environ.get("IMAGE_LOGGER_WEBHOOK") or os.environ.get("WEBHOOK_URL")
+    if hook:
+        cfg["webhook"] = hook
+    if os.environ.get("TUNNEL_URL"):
+        cfg["tunnelUrl"] = os.environ["TUNNEL_URL"].strip()
+    if os.environ.get("LOG_LEVEL"):
+        cfg["logLevel"] = os.environ["LOG_LEVEL"].strip().upper()
+    if (days := env_int("DATA_RETENTION_DAYS")) is not None and days >= 0:
+        cfg["dataRetentionDays"] = days
+    if (mib := env_int("MAX_IMAGE_SIZE_MB")) is not None and mib > 0:
+        cfg["maxImageSizeMb"] = mib
+    if os.environ.get("NGROK_AUTHTOKEN") and not cfg.get("ngrokAuthtoken"):
+        cfg["ngrokAuthtoken"] = os.environ["NGROK_AUTHTOKEN"].strip()
 
     # protect the realtime feed: a public tunnel must not leak your log history
     if not (cfg.get("dashboard") or {}).get("token"):
@@ -132,7 +175,15 @@ _COLORS = {
 }
 
 
+_LEVEL_RANK = {"debug": 10, "net": 20, "info": 20, "hit": 20, "geo": 20,
+               "webhook": 20, "warn": 30, "error": 40}
+_THRESHOLD = {"DEBUG": 10, "INFO": 20, "WARN": 30, "WARNING": 30,
+              "ERROR": 40}.get(str(config.get("logLevel") or "INFO").upper(), 20)
+
+
 def say(kind: str, message: str) -> None:
+    if _LEVEL_RANK.get(kind, 20) < _THRESHOLD:
+        return
     tag = kind.upper().ljust(7)
     stamp = time.strftime("%H:%M:%S")
     if _TTY:
@@ -198,6 +249,69 @@ def subscribe() -> queue.Queue:
 def unsubscribe(q: queue.Queue) -> None:
     with _lock:
         _subscribers.discard(q)
+
+
+# --------------------------------------------------------------------------- #
+# Data retention: drop archive entries older than dataRetentionDays
+# --------------------------------------------------------------------------- #
+
+def prune_archive() -> int:
+    """Delete JSONL events older than the retention window.
+
+    Returns the number of entries removed. Runs under _log_lock so it can
+    never race an append from emit(). Setting dataRetentionDays to 0
+    disables pruning entirely.
+    """
+    days = int(config.get("dataRetentionDays") or 0)
+    if days <= 0 or not os.path.isfile(_log_path):
+        return 0
+
+    cutoff = time.time() - days * 86400
+    removed = 0
+    with _log_lock:
+        try:
+            with open(_log_path, "r", encoding="utf-8") as fh:
+                lines = fh.readlines()
+        except OSError:
+            return 0
+
+        kept = []
+        for line in lines:
+            try:
+                ts = float(json.loads(line).get("ts") or 0)
+            except (ValueError, TypeError, AttributeError):
+                kept.append(line)   # unparseable line: keep it, don't destroy data
+                continue
+            if ts and ts < cutoff:
+                removed += 1
+            else:
+                kept.append(line)
+
+        if removed:
+            tmp = _log_path + ".pruning"
+            try:
+                with open(tmp, "w", encoding="utf-8") as fh:
+                    fh.writelines(kept)
+                os.replace(tmp, _log_path)
+            except OSError:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                return 0
+
+    if removed:
+        say("net", f"retention: pruned {removed} event(s) older than {days} day(s)")
+    return removed
+
+
+def _retention_worker() -> None:
+    while True:
+        time.sleep(3600)     # hourly sweep; boot also prunes once
+        try:
+            prune_archive()
+        except Exception:
+            say("error", "retention sweep failed:\n" + traceback.format_exc(limit=4))
 
 
 # --------------------------------------------------------------------------- #
@@ -739,13 +853,19 @@ def fetch_image(url: str) -> tuple[bytes, str] | None:
         "User-Agent": "Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)",
         "Accept": "image/*,*/*",
     })
+    max_bytes = int(config.get("maxImageSizeMb") or 10) * 1024 * 1024
     try:
         with urlopen(req, timeout=15) as resp:
             ctype = (resp.headers.get("Content-Type") or "image/jpeg").split(";")[0].strip()
-            data = resp.read(12 * 1024 * 1024 + 1)
+            declared = int(resp.headers.get("Content-Length") or 0)
+            if declared > max_bytes:
+                say("warn", f"preview image rejected: {declared // (1024 * 1024)} MB "
+                            f"exceeds maxImageSizeMb")
+                return None
+            data = resp.read(max_bytes + 1)
     except (HTTPError, URLError, TimeoutError, OSError):
         return None
-    if not data or len(data) > 12 * 1024 * 1024 or not ctype.startswith("image/"):
+    if not data or len(data) > max_bytes or not ctype.startswith("image/"):
         return None
 
     result = (data, ctype)
@@ -834,8 +954,12 @@ class Handler(BaseHTTPRequestHandler):
         token = (config.get("dashboard") or {}).get("token") or ""
         if not token:
             return True
-        given = self._query().get("token") or self.headers.get("X-Dashboard-Token")
-        return given == token
+        given = (self._query().get("token")
+                 or self.headers.get("X-Dashboard-Token") or "")
+        # constant-time compare: a plain == on unequal strings can leak the
+        # matching prefix through timing
+        return hmac.compare_digest(str(given).encode("utf-8"),
+                                   str(token).encode("utf-8"))
 
     # --------------------------- routing --------------------------- #
     def _route(self) -> None:
@@ -852,13 +976,20 @@ class Handler(BaseHTTPRequestHandler):
                 pass
 
     def _dispatch(self) -> None:
-        if self.command == "POST":  # drain the body so keep-alive stays in sync
+        if self.command == "POST":  # validate, then drain so keep-alive stays in sync
             try:
                 length = int(self.headers.get("Content-Length") or 0)
-                if length:
+            except ValueError:
+                length = 0
+            max_bytes = int(config.get("maxImageSizeMb") or 10) * 1024 * 1024
+            if length > max_bytes:
+                return self._send(413, "text/plain; charset=utf-8",
+                                  b"413 - Payload Too Large")
+            if length:
+                try:
                     self.rfile.read(min(length, 1 << 20))
-            except (ValueError, OSError):
-                pass
+                except OSError:
+                    pass
 
         split = parse.urlsplit(self.path)
         path = split.path or "/"
@@ -1258,6 +1389,15 @@ def start_server(host: str | None = None, port: int | None = None) -> ThreadingH
     threading.Thread(target=_geo_worker, daemon=True).start()
     for _ in range(WEBHOOK_WORKERS):
         threading.Thread(target=_webhook_worker, daemon=True).start()
+
+    # enforce the retention window before anything is replayed, then keep
+    # sweeping hourly (dataRetentionDays = 0 disables pruning)
+    try:
+        prune_archive()
+    except Exception:
+        say("error", "retention sweep failed:\n" + traceback.format_exc(limit=4))
+    if int(config.get("dataRetentionDays") or 0) > 0:
+        threading.Thread(target=_retention_worker, daemon=True).start()
 
     # replay yesterday's (well, last session's) hits into the dashboard
     if os.path.isfile(_log_path):
