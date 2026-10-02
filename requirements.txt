@@ -1,0 +1,6 @@
+# v3 runs on the Python standard library only — nothing to install.
+# (Python 3.10+)
+#
+# Optional, only if you want the old Vercel deployment style:
+#   requests
+#   httpagentparser

@@ -1,0 +1,30 @@
+# --- secrets: never commit -------------------------------------------------
+.env
+.env.*
+!.env.example
+secrets/
+credentials/
+
+# --- local configuration (holds webhook URL / tunnel authtoken) ------------
+config.json
+
+# --- collected data: never commit ------------------------------------------
+logs/
+data/
+uploads/
+*.log
+
+# --- python ----------------------------------------------------------------
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# --- tunnel binaries downloaded at runtime ---------------------------------
+cloudflared
+ngrok
+.ngrok.tgz
+.askpass.sh
+
+# --- os / editor -----------------------------------------------------------
+.DS_Store
