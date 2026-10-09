@@ -46,6 +46,23 @@ def banner(text: str) -> None:
     print("\033[96m" + "─" * 62 + "\033[0m")
 
 
+def remember_tunnel_url(url: str) -> None:
+    """Persist the live public URL to logs/tunnel.url.
+
+    Quick-tunnel URLs change on every restart and vanish into terminal
+    scrollback, which makes a working tunnel look like a dead one when an
+    old link is re-opened. Keeping the current URL on disk gives the
+    operator (and any test script) one authoritative place to read it.
+    """
+    try:
+        os.makedirs(os.path.join(ROOT, "logs"), exist_ok=True)
+        with open(os.path.join(ROOT, "logs", "tunnel.url"), "w",
+                  encoding="utf-8") as fh:
+            fh.write(url + "\n")
+    except OSError:
+        pass
+
+
 def find_cloudflared() -> str | None:
     local = os.path.join(ROOT, "cloudflared")
     if os.path.isfile(local) and os.access(local, os.X_OK):
@@ -101,26 +118,38 @@ def start_cloudflared(port: int) -> tuple[subprocess.Popen | None, str | None]:
                 if clean:
                     last_error.append(clean)
                     del last_error[:-40]          # keep the last 40 lines
-                if app.config.get("debug"):
+                if str(app.config.get("logLevel") or "INFO").upper() == "DEBUG":
                     print("  [cloudflared]", clean)
 
         threading.Thread(target=reader, daemon=True).start()
 
-        for _ in range(60):
+        # the URL normally lands in ~5-10s, but cloudflared prints its own
+        # warning that provisioning can stall — wait up to 60s before giving up
+        for tick in range(120):
             if tunnel_url:
                 return proc, tunnel_url[0]
             if proc.poll() is not None:
                 break
+            if tick == 40:
+                app.say("net", "cloudflared is still provisioning a URL… "
+                               "(rare stalls can take close to a minute)")
             time.sleep(0.5)
 
         if tunnel_url:
             return proc, tunnel_url[0]
 
-        # exited (or timed out) -> show why, then retry once
+        # timed out (or it died) -> show why, then retry once
         code = proc.poll()
-        app.say("error", f"cloudflared exited early (code {code}) — output:")
+        if code is None:
+            app.say("error", "cloudflared produced no URL within 60s — output:")
+        else:
+            app.say("error", f"cloudflared exited early (code {code}) — output:")
         for line in last_error[-12:]:
             print("    " + line)
+        if any(re.search(r"\b429\b|too many request", l, re.I) for l in last_error):
+            app.say("warn", "cloudflare is rate-limiting this IP — wait a few "
+                            "minutes before retrying, or use `--tunnel ssh` "
+                            "(no login, no rate limit)")
         try:
             proc.terminate()
         except Exception:  # noqa: BLE001
@@ -428,7 +457,13 @@ def self_test(base: str, attempts: int = 6, delay: float = 2.0) -> bool:
     A bare 200 proves nothing: landing pages and SPA fallbacks (as served by
     localhost.run) happily return 200 for any path, so the response body is
     checked for our /healthz JSON marker instead.
+
+    Brand-new trycloudflare hostnames routinely take 60-90s before DNS starts
+    answering, so every failed attempt records *why* it failed — a bare
+    "FAILED" line is useless when the tunnel is actually fine.
     """
+    started = time.time()
+    last_error = "no attempt completed"
     for attempt in range(attempts):
         try:
             with urllib.request.urlopen(base + "/healthz", timeout=15) as resp:
@@ -439,12 +474,18 @@ def self_test(base: str, attempts: int = 6, delay: float = 2.0) -> bool:
                     data = {}
                 if resp.status == 200 and data.get("ok") is True and data.get("app"):
                     app.say("net", f"self-test verified: {data['app']} "
-                                   f"v{data.get('version', '?')} through the tunnel")
+                                   f"{str(data.get('version', '?')).lstrip('v')} "
+                                   f"through the tunnel "
+                                   f"({time.time() - started:.0f}s)")
                     return True
-        except Exception:  # noqa: BLE001
-            pass
+                last_error = (f"HTTP {resp.status} but the body is not this "
+                              f"app: {body[:70]!r}")
+        except Exception as exc:  # noqa: BLE001
+            last_error = f"{type(exc).__name__}: {exc}"
         if attempt < attempts - 1:
             time.sleep(delay)
+    app.say("warn", f"self-test gave up after {time.time() - started:.0f}s — "
+                    f"last error: {last_error}")
     return False
 
 
@@ -494,6 +535,9 @@ def main() -> None:
     elif kind != "none":
         proc, tunnel_url, kind_used = launch_tunnel(kind, port)
 
+    if tunnel_url:
+        remember_tunnel_url(tunnel_url)
+
     local = f"http://{app.config['host']}:{port}"
     dash_path = (app.config.get("dashboard") or {}).get("path", "/dashboard")
     token = (app.config.get("dashboard") or {}).get("token") or ""
@@ -506,9 +550,12 @@ def main() -> None:
     if dash_public:
         app.PUBLIC_BASE = tunnel_url
         print(f"  \033[1;92mpublic    {tunnel_url}\033[0m")
-        print(f"  \033[90mtunnel    {kind_used}\033[0m")
+        print(f"  \033[90mtunnel    {kind_used}  (URL changes on every restart; "
+              f"also saved to logs/tunnel.url)\033[0m")
         print(f"  \033[1;93mdashboard {dash_public}\033[0m")
         print(f"  \033[90mlogs api  {tunnel_url}/api/logs?token={token}\033[0m")
+        print("  \033[90ma brand-new URL may take ~30-90s to start resolving in "
+              "DNS — the self-test below checks it for you\033[0m")
     else:
         print(f"  \033[1;93mdashboard {dash_local}\033[0m")
         if kind != "none":
@@ -520,9 +567,20 @@ def main() -> None:
         # brand-new trycloudflare hostnames can take a while to resolve in DNS,
         # so verify in the background instead of holding up the banner
         def run_self_test() -> None:
-            ok = self_test(tunnel_url, attempts=20, delay=3.0)
-            mark = "\033[1;92mPASSED\033[0m" if ok else "\033[1;91mFAILED\033[0m"
-            print(f"  self-test {mark} — tunnel reaches this server: {ok}", flush=True)
+            # 40 x 3s = 120s: observed DNS lag for fresh quick-tunnel
+            # hostnames runs 60-90s, so 60s used to fail on a healthy tunnel
+            ok = self_test(tunnel_url, attempts=40, delay=3.0)
+            if ok:
+                print("  self-test \033[1;92mPASSED\033[0m — public link reaches "
+                      "this server, it is live", flush=True)
+            else:
+                print("  self-test \033[1;91mFAILED\033[0m — the URL is not "
+                      "reaching this server (yet)", flush=True)
+                print("  \033[90mif the error above is DNS/SSL, the brand-new URL "
+                      "just needs more time (~60-90s) — retry the link shortly. "
+                      "If it persists, Ctrl+C and relaunch for a fresh URL; the "
+                      "current one is always in logs/tunnel.url\033[0m",
+                      flush=True)
 
         threading.Thread(target=run_self_test, daemon=True).start()
 
@@ -540,6 +598,7 @@ def main() -> None:
                 proc, tunnel_url, kind_used = launch_tunnel(kind, port)
                 if tunnel_url:
                     app.PUBLIC_BASE = tunnel_url
+                    remember_tunnel_url(tunnel_url)
                     app.say("net", f"tunnel back up ({kind_used}): {tunnel_url}")
                 else:
                     proc = None
@@ -556,6 +615,11 @@ def main() -> None:
                 proc.kill()
         server.shutdown()
         server.server_close()
+        # the URL dies with the tunnel — never leave a dead link on disk
+        try:
+            os.unlink(os.path.join(ROOT, "logs", "tunnel.url"))
+        except OSError:
+            pass
 
 
 if __name__ == "__main__":
