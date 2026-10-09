@@ -24,6 +24,23 @@
 | Blocked | Local firewall | Allow loopback on the chosen port |
 | Self-test `FAILED` | URL is not reaching this app | Verify `host`/`port`, retry |
 
+## Public URL won't open (but `run.py` printed one)
+
+Nearly always **fresh-name DNS lag**, not a dead tunnel:
+
+| Symptom | What it means | Fix |
+|---|---|---|
+| Browser says the site can't be reached / `NXDOMAIN` right after launch | The new `*.trycloudflare.com` name needs 30–90 s to enter DNS | Wait ~30 s, retry; the local URL works immediately |
+| `self-test FAILED` with `Name or service not known` or an SSL error | Same lag — the launcher only reports the last error it saw | Retry until the 120 s window passes; relaunch if needed |
+| `self-test PASSED` but an **old** link is dead | Quick-tunnel URLs change on every restart | Use the URL from the latest banner or `logs/tunnel.url` |
+| `429` / "too many requests" | Cloudflare is rate-limiting this IP | Wait a few minutes, or `python3 run.py --tunnel ssh` |
+
+Confirm the tunnel itself in one command (should print your `/healthz` JSON):
+
+```bash
+curl "$(cat logs/tunnel.url)/healthz"
+```
+
 ## Tunnel returns 429
 
 Public tunnels are rate-limited by their providers.

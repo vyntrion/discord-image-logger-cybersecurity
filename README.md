@@ -28,6 +28,36 @@ exposed HTTP endpoints reached through a development tunnel.
 
 ---
 
+## Discord Security Auditor (new)
+
+This repository now ships a **read-only security auditor** for Discord servers
+you own or administer. It checks roles, permission stacking, bots, webhooks,
+invites, AutoMod, and recent audit-log activity, then reports each
+misconfiguration with a severity, evidence, and a concrete fix.
+
+```bash
+python3 toolkit.py guilds                  # guilds your bot has joined
+python3 toolkit.py audit --guild GUILD_ID  # run the audit
+python3 toolkit.py perms 8                 # decode a permission bitmask
+```
+
+It uses **only Discord's official REST API with a bot token**, only ever issues
+`GET` requests, and refuses user/self-bot tokens. Full guide:
+[docs/security-auditor.md](docs/security-auditor.md).
+
+Offline test suite (no token, no network):
+
+```bash
+python3 tests/test_offline.py
+```
+
+> [!NOTE]
+> The image-logger service described below is a separate, legacy component of
+> this repository and is **not** part of the security auditor. Use it only in
+> environments you own with explicit consent from everyone involved.
+
+---
+
 ## Overview
 
 **What the project does.** It runs a small, self-contained HTTP service that
@@ -322,11 +352,18 @@ python3 run.py --no-tunnel      # local only
 All providers except ngrok require **no account**. The launcher prints the
 public URL, a token-protected dashboard URL, and runs a self-test that proves
 the tunnel really reaches *this* application (it validates the response body,
-not just a `200`).
+not just a `200`). The live URL is also saved to **`logs/tunnel.url`** while
+the tunnel is up.
 
-> Cloudflare quick tunnels (`*.trycloudflare.com`) are rate-limited per IP; a
-> `429` during provisioning is a provider-side limit, not an error to work
-> around by making more requests. Wait, or switch provider.
+> **Fresh URLs need a moment.** A brand-new `*.trycloudflare.com` name can
+> take 30–90 s to enter DNS, so the link may not open immediately even though
+> the tunnel is healthy. The self-test retries for 120 s and prints the last
+> error it saw; if that error is DNS/SSL, just wait ~30 s and reopen it.
+>
+> Cloudflare quick tunnels are rate-limited per IP; a `429` during
+> provisioning is a provider-side limit, not an error to work around by making
+> more requests. Wait, or switch provider (`--tunnel ssh` needs no login and
+> is not rate-limited).
 
 Provider-specific caveats (free Pinggy tunnels show a screening page to
 browsers *and* to Discord's link-preview crawler) are documented in

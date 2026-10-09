@@ -46,18 +46,26 @@ and validates the JSON body (not just a `200`). Some providers answer unknown
 paths with their own landing page, which would otherwise look like success:
 
 ```text
-21:02:08 NET     self-test verified: Discord Image Logger v3.0 through the tunnel
-  self-test PASSED — tunnel reaches this server: True
+20:46:02 NET     self-test verified: Discord Image Logger 3.0 through the tunnel (63s)
+  self-test PASSED — public link reaches this server, it is live
 ```
 
-If the self-test fails, the printed URL is not reaching your application —
-check `host`/`port`, then retry.
+The elapsed time matters: brand-new quick-tunnel hostnames often need
+60–90 s before DNS answers, so the launcher retries for **120 s** before
+giving up. A failure prints the *last error it saw* (`Name or service not
+known`, an SSL handshake error, a wrong body) so you can tell lagging DNS
+apart from a real misconfiguration — if the error is DNS/SSL, wait ~30 s and
+open the link again.
+
+The current URL is also written to **`logs/tunnel.url`** while the tunnel is
+up (and removed on shutdown), so it is never lost to terminal scrollback.
 
 ### Automatic restart
 
 If the tunnel process dies (network blip, Pinggy's 60-minute limit), `run.py`
-restarts it and prints the new URL. **Public URLs change on restart** — tell
-collaborators to re-copy rather than bookmarking.
+restarts it and prints the new URL — `logs/tunnel.url` is updated to match.
+**Public URLs change on restart**; tell collaborators to re-copy rather than
+bookmarking.
 
 ## Tunnel Security
 
@@ -117,8 +125,17 @@ python3 setup.py --ngrok-token <your-token> --yes
 
 ### DNS lag on fresh URLs
 
-New `*.trycloudflare.com` names can take 30–60 s to resolve. The local URL
-works immediately, and the launcher retries the self-test for up to a minute.
+New `*.trycloudflare.com` names can take **30–90 s** to resolve, and
+Cloudflare itself prints "it may take some time to be reachable". Symptoms:
+
+- the browser shows `DNS_PROBE_FINISHED_NXDOMAIN` / connection errors for the
+  first minute, while `http://127.0.0.1:<port>` works instantly;
+- the self-test initially fails with `Name or service not known`.
+
+The launcher retries the self-test for **120 s** (longer than the observed
+lag) and tells you the last error it saw. If it still reports `FAILED` with a
+DNS/SSL error, wait ~30 s and reopen the link; if it persists, `Ctrl+C` and
+relaunch for a fresh URL. The live URL is always in `logs/tunnel.url`.
 
 ## What tunnels are not
 
